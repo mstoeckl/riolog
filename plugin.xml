@@ -6,12 +6,12 @@
          point="org.eclipse.ui.views">
       <category
             name="C/C++"
-            id="netconsole2">
+            id="riolog">
       </category>
       <view
             name="Sample View"
             icon="icons/sample.gif"
-            category="netconsole2"
+            category="riolog"
             class="netconsole2.views.SampleView"
             id="netconsole2.views.SampleView">
       </view>
