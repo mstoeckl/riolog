@@ -165,7 +165,6 @@ public class RiologView extends ViewPart {
 				}
 			}
 		});
-		pauseButton.setAlignment(SWT.LEFT);
 		discardButton = new Button(parent, SWT.TOGGLE);
 		discardButton.setText(discardAction.getText());
 		discardButton.addSelectionListener(new SelectionAdapter() {
