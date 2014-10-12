@@ -3,11 +3,15 @@ package netconsole2.views;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.SocketException;
 import java.nio.channels.DatagramChannel;
+import java.util.ArrayList;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
@@ -89,7 +93,6 @@ public class SampleView extends ViewPart {
 	class NameSorter extends ViewerSorter {
 	}
 
-
 	/**
 	 * The constructor.
 	 */
@@ -104,15 +107,17 @@ public class SampleView extends ViewPart {
 			e.printStackTrace();
 			return null;
 		}
-		return new String(p.getData());
+		return new String(p.getData(), 0, p.getLength());
 	}
-	
+
 	public static DatagramSocket makeRecvSocket() {
 		DatagramSocket socket = null;
 		try {
 			socket = new DatagramSocket(null);
 			socket.setReuseAddress(true);
-			socket.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 6666));
+			// socket.bind(new
+			// InetSocketAddress(InetAddress.getLoopbackAddress(), 6666));
+			socket.bind(new InetSocketAddress(6666));
 		} catch (SocketException e) {
 			e.printStackTrace();
 			socket.close();
@@ -120,12 +125,12 @@ public class SampleView extends ViewPart {
 		}
 		return socket;
 	}
-	
-	public static class UDPReceiver implements Runnable {
-		SampleView view;
 
-		public UDPReceiver(SampleView v) {
-			view = v;
+	public static class UDPReceiver implements Runnable {
+		BlockingQueue<String> queue;
+
+		public UDPReceiver(BlockingQueue<String> v) {
+			queue = v;
 
 		}
 
@@ -138,21 +143,30 @@ public class SampleView extends ViewPart {
 		@Override
 		public void run() {
 			DatagramSocket socket = makeRecvSocket();
-			if (socket == null) 
+			if (socket == null)
 				return;
 			byte[] buf = new byte[4096];
-			while (true) {			
-				System.err.println("PREPACK");
+			while (true) {
 				String s = getPacket(socket, buf);
 				if (s != null) {
-					view.appendText(new String(buf));
+					try {
+						queue.put(s);
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					}
 				}
 			}
-			//socket.close();
+			// socket.close();
 		}
 	}
 
 	Text text;
+
+	public static void startDaemonThread(Runnable r) {
+		Thread t = new Thread(r);
+		t.setDaemon(true);
+		t.start();
+	}
 
 	/**
 	 * This is a callback that will allow us to create the viewer and initialize
@@ -168,16 +182,6 @@ public class SampleView extends ViewPart {
 
 		text = new Text(parent, SWT.MULTI | SWT.H_SCROLL | SWT.V_SCROLL
 				| SWT.READ_ONLY);
-		text.append("TEST");
-
-		new Thread(() -> (appendText("WOINK"))).start();
-
-		new Thread(new Runnable() {
-			@Override
-			public void run() {
-				appendText("NOINK");
-			}
-		}).start();
 
 		// Create the help context id for the viewer's control
 		PlatformUI.getWorkbench().getHelpSystem()
@@ -186,42 +190,51 @@ public class SampleView extends ViewPart {
 		hookContextMenu();
 		hookDoubleClickAction();
 		contributeToActionBars();
-		//new UDPReceiver(this).start();
-
-		new Thread(new Runnable() {
-			@Override
-			public void run() {
-				while (true) {
-					try {
-						Thread.sleep(500);
-					} catch (InterruptedException e) {
-						// TODO Auto-generated catch block
-						e.printStackTrace();
-					}
-
-					appendText(String.valueOf(System.currentTimeMillis())
-							+ "\n");
-				}
-
-			}
-		}).start();
-		
-		String s = getPacket(makeRecvSocket(), new byte[4096]);
-		System.err.print(s);
-		appendText(s);
-		
+		startListening();
 	}
 
-	public void appendText(final String string) {
-		Display.getDefault().syncExec(new Runnable() {
+	void startListening() {
+		final BlockingQueue<String> queue = new LinkedBlockingQueue<String>();
+		new UDPReceiver(queue).start();
+		startDaemonThread(new Runnable() {
 			@Override
 			public void run() {
-				if (text.isDisposed())
+				DatagramSocket socket = makeRecvSocket();
+				if (socket == null)
 					return;
-				text.append(string);
+				byte[] buf = new byte[4096];
+				while (true) {
+					String s = getPacket(socket, buf);
+					if (s != null) {
+						try {
+							queue.put(s);
+						} catch (InterruptedException e) {
+							e.printStackTrace();
+						}
+					}
+				}
 			}
 		});
-
+		startDaemonThread(new Runnable() {
+			@Override
+			public void run() {
+				ArrayList<String> temp = new ArrayList<>();
+				while (true) {
+					queue.drainTo(temp);
+					Display.getDefault().syncExec(new Runnable() {
+						@Override
+						public void run() {
+							if (text.isDisposed())
+								return;
+							for (String s : temp) {
+								text.append(s);
+							}
+						}
+					});
+					temp.clear();
+				}
+			}
+		});
 	}
 
 	private void hookContextMenu() {

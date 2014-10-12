@@ -4,14 +4,10 @@
 
    <extension
          point="org.eclipse.ui.views">
-      <category
-            name="C/C++"
-            id="riolog">
-      </category>
       <view
-            name="Sample View"
+            name="Riolog"
             icon="icons/sample.gif"
-            category="riolog"
+            category="org.eclipse.ui"
             class="netconsole2.views.SampleView"
             id="netconsole2.views.SampleView">
       </view>
