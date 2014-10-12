@@ -3,29 +3,40 @@ package netconsole2.views;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
-import java.net.Inet4Address;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.SocketException;
-import java.nio.channels.DatagramChannel;
 import java.util.ArrayList;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import org.eclipse.jface.action.Action;
+import org.eclipse.jface.action.IMenuListener;
+import org.eclipse.jface.action.IMenuManager;
+import org.eclipse.jface.action.IToolBarManager;
+import org.eclipse.jface.action.MenuManager;
+import org.eclipse.jface.action.Separator;
+import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jface.viewers.DoubleClickEvent;
+import org.eclipse.jface.viewers.IDoubleClickListener;
+import org.eclipse.jface.viewers.ISelection;
+import org.eclipse.jface.viewers.IStructuredContentProvider;
+import org.eclipse.jface.viewers.IStructuredSelection;
+import org.eclipse.jface.viewers.ITableLabelProvider;
+import org.eclipse.jface.viewers.LabelProvider;
+import org.eclipse.jface.viewers.TableViewer;
+import org.eclipse.jface.viewers.Viewer;
+import org.eclipse.jface.viewers.ViewerSorter;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Shell;
-import org.eclipse.swt.widgets.Text;
-import org.eclipse.ui.part.*;
-import org.eclipse.jface.viewers.*;
-import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.jface.action.*;
-import org.eclipse.jface.dialogs.MessageDialog;
-import org.eclipse.ui.*;
 import org.eclipse.swt.widgets.Menu;
-import org.eclipse.swt.SWT;
+import org.eclipse.swt.widgets.Text;
+import org.eclipse.ui.IActionBars;
+import org.eclipse.ui.ISharedImages;
+import org.eclipse.ui.IWorkbenchActionConstants;
+import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.part.ViewPart;
 
 /**
  * This sample class demonstrates how to plug-in a new workbench view. The view
@@ -99,12 +110,17 @@ public class SampleView extends ViewPart {
 	public SampleView() {
 	}
 
+	@Override
+	public void dispose() {
+		stopListening();
+		super.dispose();
+	}
+
 	public static String getPacket(DatagramSocket socket, byte[] buf) {
 		DatagramPacket p = new DatagramPacket(buf, buf.length);
 		try {
 			socket.receive(p);
 		} catch (IOException e) {
-			e.printStackTrace();
 			return null;
 		}
 		return new String(p.getData(), 0, p.getLength());
@@ -115,8 +131,6 @@ public class SampleView extends ViewPart {
 		try {
 			socket = new DatagramSocket(null);
 			socket.setReuseAddress(true);
-			// socket.bind(new
-			// InetSocketAddress(InetAddress.getLoopbackAddress(), 6666));
 			socket.bind(new InetSocketAddress(6666));
 		} catch (SocketException e) {
 			e.printStackTrace();
@@ -126,46 +140,13 @@ public class SampleView extends ViewPart {
 		return socket;
 	}
 
-	public static class UDPReceiver implements Runnable {
-		BlockingQueue<String> queue;
-
-		public UDPReceiver(BlockingQueue<String> v) {
-			queue = v;
-
-		}
-
-		public void start() {
-			Thread t = new Thread(this);
-			t.setDaemon(true);
-			t.start();
-		}
-
-		@Override
-		public void run() {
-			DatagramSocket socket = makeRecvSocket();
-			if (socket == null)
-				return;
-			byte[] buf = new byte[4096];
-			while (true) {
-				String s = getPacket(socket, buf);
-				if (s != null) {
-					try {
-						queue.put(s);
-					} catch (InterruptedException e) {
-						e.printStackTrace();
-					}
-				}
-			}
-			// socket.close();
-		}
-	}
-
 	Text text;
 
-	public static void startDaemonThread(Runnable r) {
-		Thread t = new Thread(r);
+	public Thread startDaemonThread(Runnable r, String name) {
+		Thread t = new Thread(r, name);
 		t.setDaemon(true);
 		t.start();
+		return t;
 	}
 
 	/**
@@ -193,48 +174,71 @@ public class SampleView extends ViewPart {
 		startListening();
 	}
 
+	Thread listener;
+	Thread transferer;
+	volatile DatagramSocket socket_hook;
 	void startListening() {
 		final BlockingQueue<String> queue = new LinkedBlockingQueue<String>();
-		new UDPReceiver(queue).start();
-		startDaemonThread(new Runnable() {
+		socket_hook = null;
+		listener = startDaemonThread(new Runnable() {
 			@Override
 			public void run() {
 				DatagramSocket socket = makeRecvSocket();
 				if (socket == null)
 					return;
+				socket_hook = socket;
 				byte[] buf = new byte[4096];
-				while (true) {
+				while (!Thread.interrupted()) {
 					String s = getPacket(socket, buf);
 					if (s != null) {
 						try {
 							queue.put(s);
 						} catch (InterruptedException e) {
-							e.printStackTrace();
+							socket.close();
+							return;
 						}
 					}
 				}
+				socket.close();
 			}
-		});
-		startDaemonThread(new Runnable() {
+		}, "Riolog-Listener");
+		transferer = startDaemonThread(new Runnable() {
 			@Override
 			public void run() {
 				ArrayList<String> temp = new ArrayList<>();
-				while (true) {
+				while (!Thread.interrupted()) {
+					try {
+						temp.add(queue.take());
+					} catch (InterruptedException e) {
+						return;
+					}
 					queue.drainTo(temp);
+					
+					System.err.println(temp.size());
 					Display.getDefault().syncExec(new Runnable() {
 						@Override
 						public void run() {
 							if (text.isDisposed())
 								return;
+							StringBuilder builder = new StringBuilder(128);
 							for (String s : temp) {
-								text.append(s);
+								builder.append(s);
 							}
+							text.append(builder.toString());						
 						}
 					});
 					temp.clear();
 				}
 			}
-		});
+		}, "Riolog-Transfer");
+	}
+	
+	void stopListening() {
+		if (socket_hook != null) {
+			socket_hook.close();
+		}
+		listener.interrupt();
+		transferer.interrupt();
 	}
 
 	private void hookContextMenu() {
