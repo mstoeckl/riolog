@@ -42,14 +42,15 @@ public class RiologView extends ViewPart {
 		return e;
 	}
 
-	public static String getPacket(DatagramSocket socket, byte[] buf) {
-		DatagramPacket p = new DatagramPacket(buf, buf.length);
+	public static byte[] getPacket(DatagramSocket socket, DatagramPacket buf) {
 		try {
-			socket.receive(p);
+			socket.receive(buf);
 		} catch (IOException e) {
 			return null;
 		}
-		return new String(p.getData(), 0, p.getLength());
+		byte[] ret = new byte[buf.getLength()];
+		System.arraycopy(buf.getData(), 0, ret, 0, ret.length);
+		return ret;
 	}
 
 	public static DatagramSocket makeRecvSocket() {
@@ -316,9 +317,28 @@ public class RiologView extends ViewPart {
 	public void setFocus() {
 		text.setFocus();
 	}
+	
+	public static String drainToString(ArrayList<byte[]> arr) {
+		int netlength = 0;
+		for (byte[] b : arr) {
+			netlength += b.length;
+		}
+
+		byte[] sum = new byte[netlength];
+		int mark = 0;
+		for (int i=0;i<arr.size();i++) {
+			byte[] b = arr.get(i);
+			System.arraycopy(b, 0, sum, mark, b.length);
+			arr.set(i, null);
+			mark += b.length;
+		}
+		arr.clear();
+		return new String(sum);
+		
+	}
 
 	void startListening() {
-		final BlockingQueue<String> queue = new LinkedBlockingQueue<String>();
+		final BlockingQueue<byte[]> queue = new LinkedBlockingQueue<>();
 		listener = startDaemonThread(new Runnable() {
 			@Override
 			public void run() {
@@ -327,8 +347,9 @@ public class RiologView extends ViewPart {
 					return;
 				socket_hook = socket;
 				byte[] buf = new byte[4096];
+				DatagramPacket datagram = new DatagramPacket(buf, buf.length);
 				while (!Thread.interrupted()) {
-					String s = getPacket(socket, buf);
+					byte[] s = getPacket(socket, datagram);
 					if (s != null && !discard) {
 						try {
 							queue.put(s);
@@ -344,7 +365,7 @@ public class RiologView extends ViewPart {
 		transferer = startDaemonThread(new Runnable() {
 			@Override
 			public void run() {
-				ArrayList<String> temp = new ArrayList<>();
+				ArrayList<byte[]> temp = new ArrayList<>();
 				while (!cleanup) {
 					try {
 						temp.add(queue.take());
@@ -360,14 +381,9 @@ public class RiologView extends ViewPart {
 							public void run() {
 								if (text.isDisposed())
 									return;
-								StringBuilder builder = new StringBuilder(128);
-								for (String s : temp) {
-									builder.append(s);
-								}
-								text.append(builder.toString());
+								text.append(drainToString(temp));
 							}
 						});
-						temp.clear();
 					} else {
 						Display.getDefault().syncExec(new Runnable() {
 							@Override
